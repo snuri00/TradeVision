@@ -193,11 +193,23 @@ def detect_market(symbol: str) -> str:
 
 
 def get_all_index_symbols() -> dict[str, str]:
-    return {
-        market.name: market.index_symbol
-        for market in MARKETS.values()
-        if market.index_symbol
-    }
+    result = {}
+    for key, market in MARKETS.items():
+        if market.index_symbol:
+            result[market.name] = market.index_symbol
+    result.update({
+        "BIST100": MARKETS["bist"].index_symbol,
+        "SP500": MARKETS["us"].index_symbol,
+        "FTSE100": MARKETS["uk"].index_symbol,
+        "USDTRY": MARKETS["bist"].currency_pair,
+        "DAX": MARKETS["germany"].index_symbol,
+        "CAC40": MARKETS["france"].index_symbol,
+        "NIKKEI": MARKETS["japan"].index_symbol,
+        "HSI": MARKETS["hongkong"].index_symbol,
+        "NIFTY": MARKETS["india"].index_symbol,
+        "ASX": MARKETS["australia"].index_symbol,
+    })
+    return result
 
 
 def get_all_macro_symbols() -> list[str]:

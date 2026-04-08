@@ -1237,8 +1237,8 @@ wheels = [
 ]
 
 [[package]]
-name = "trader"
-version = "0.1.0"
+name = "tradevision"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "alpaca-py" },

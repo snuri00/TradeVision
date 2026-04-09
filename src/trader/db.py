@@ -72,6 +72,20 @@ def init_db():
                 executed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS trade_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                reasoning TEXT NOT NULL,
+                signals_snapshot TEXT,
+                sentiment TEXT,
+                outcome TEXT,
+                lesson TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (trade_id) REFERENCES paper_trades(id)
+            );
+
             CREATE TABLE IF NOT EXISTS local_positions (
                 symbol TEXT PRIMARY KEY,
                 market TEXT NOT NULL,
@@ -253,3 +267,35 @@ def save_performance_snapshot(conn: sqlite3.Connection, snapshot_date: str, peri
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (snapshot_date, period_type, market, total_value, total_pnl, pnl_pct, win_rate, max_drawdown),
     )
+
+
+def save_journal_entry(conn: sqlite3.Connection, symbol: str, side: str,
+                        reasoning: str, trade_id: int = None,
+                        signals_snapshot: str = None, sentiment: str = None) -> dict:
+    cursor = conn.execute(
+        """INSERT INTO trade_journal (trade_id, symbol, side, reasoning, signals_snapshot, sentiment)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (trade_id, symbol, side, reasoning, signals_snapshot, sentiment),
+    )
+    return {"id": cursor.lastrowid, "symbol": symbol, "side": side}
+
+
+def update_journal_outcome(conn: sqlite3.Connection, journal_id: int,
+                            outcome: str, lesson: str = None):
+    conn.execute(
+        "UPDATE trade_journal SET outcome=?, lesson=? WHERE id=?",
+        (outcome, lesson, journal_id),
+    )
+
+
+def get_journal_entries(conn: sqlite3.Connection, symbol: str = None,
+                         limit: int = 20) -> list[dict]:
+    query = "SELECT * FROM trade_journal WHERE 1=1"
+    params: list[Any] = []
+    if symbol:
+        query += " AND symbol = ?"
+        params.append(symbol)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]

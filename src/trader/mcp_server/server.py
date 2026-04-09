@@ -4,6 +4,7 @@ from mcp.server.fastmcp import FastMCP
 from trader.db import (
     init_db, get_db, get_watchlist, add_to_watchlist, remove_from_watchlist,
     get_trade_history, save_news_article, save_market_data, get_local_positions,
+    save_journal_entry, update_journal_outcome, get_journal_entries,
 )
 from trader.config import MARKETS, detect_market, get_all_index_symbols
 from trader.data.bist import get_bist_stocks, get_bist100_index, get_stock_history as bist_history
@@ -15,6 +16,11 @@ from trader.analysis.signals import scan_watchlist_signals
 from trader.analysis.fundamental import get_fundamentals, score_fundamentals
 from trader.analysis.volatility import calculate_volatility_metrics, calculate_volatility_position_size
 from trader.analysis.correlation import calculate_correlation_matrix, get_correlation_risk
+from trader.analysis.timeframe import multi_timeframe_analysis
+from trader.analysis.sentiment import get_fear_greed_proxy, get_insider_activity, get_analyst_sentiment
+from trader.analysis.discovery import (
+    scan_volume_anomalies, scan_gap_moves, scan_top_movers, scan_near_support_resistance,
+)
 from trader.trading.executor import execute_trade
 from trader.trading.portfolio import get_portfolio_status
 from trader.reports.performance import get_performance_report
@@ -247,6 +253,14 @@ def update_watchlist(symbol: str, action: str = "add", market: str = "") -> str:
 
 
 @mcp.tool()
+def analyze_multi_timeframe(symbol: str, timeframes: str = "1d,4h,1h") -> str:
+    """Multi-timeframe analiz: farklı zaman dilimlerinde teknik göstergeleri karşılaştırır ve uyum kontrolü yapar. timeframes: virgülle ayrılmış (15m,1h,4h,1d,1w)"""
+    tf_list = [t.strip() for t in timeframes.split(",") if t.strip()]
+    result = multi_timeframe_analysis(symbol, tf_list)
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
 def analyze_fundamentals(symbol: str) -> str:
     """Temel analiz: P/E, P/B, ROE, D/E, marjlar, büyüme oranları ve genel skor"""
     fundamentals = get_fundamentals(symbol)
@@ -327,6 +341,84 @@ def analyze_correlation(symbol: str, compare_with: str = "") -> str:
         "risk_assessment": risk,
         "correlation_matrix": matrix_dict,
     }, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def journal_add(symbol: str, side: str, reasoning: str,
+                signals_snapshot: str = "", sentiment: str = "") -> str:
+    """Trade journal'a giriş ekle: neden bu trade yapıldı, hangi sinyaller vardı. Otomatik olarak mempalace'e de kaydeder."""
+    with get_db() as conn:
+        result = save_journal_entry(
+            conn, symbol, side, reasoning,
+            signals_snapshot=signals_snapshot if signals_snapshot else None,
+            sentiment=sentiment if sentiment else None,
+        )
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def journal_update(journal_id: int, outcome: str, lesson: str = "") -> str:
+    """Trade journal girişini güncelle: sonuç ve öğrenim ekle"""
+    with get_db() as conn:
+        update_journal_outcome(conn, journal_id, outcome, lesson if lesson else None)
+    return json.dumps({"updated": journal_id, "outcome": outcome}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def journal_list(symbol: str = "", limit: int = 20) -> str:
+    """Trade journal geçmişi: tüm trade kararları ve öğrenimler"""
+    with get_db() as conn:
+        entries = get_journal_entries(conn, symbol if symbol else None, limit)
+    return json.dumps(entries, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_market_sentiment() -> str:
+    """Piyasa genel sentiment: Fear & Greed proxy skoru (VIX, S&P 500, Gold, Bonds bazlı)"""
+    result = get_fear_greed_proxy()
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_insider_trades(symbol: str) -> str:
+    """Insider trading verisi: son alım/satımlar ve insider sentiment"""
+    result = get_insider_activity(symbol)
+    return json.dumps(result, indent=2, default=str, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_analyst_ratings(symbol: str) -> str:
+    """Analist hedef fiyat ve tavsiyeler: buy/hold/sell, target price, upside potansiyeli"""
+    result = get_analyst_sentiment(symbol)
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def discover_volume_anomalies(market: str = "", min_ratio: float = 2.0, top_n: int = 10) -> str:
+    """Hacim anomalisi tarama: ortalamanın X katı hacimle işlem gören hisseler. market: boş=tüm pazarlar"""
+    results = scan_volume_anomalies(market if market else None, min_ratio, top_n)
+    return json.dumps({"volume_anomalies": results, "min_ratio": min_ratio}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def discover_gap_moves(market: str = "", min_gap_pct: float = 2.0, top_n: int = 10) -> str:
+    """Gap açılışları tarama: belirli yüzdenin üzerinde gap up/down yapan hisseler. market: boş=tüm pazarlar"""
+    results = scan_gap_moves(market if market else None, min_gap_pct, top_n)
+    return json.dumps({"gap_moves": results, "min_gap_pct": min_gap_pct}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def discover_top_movers(market: str = "", top_n: int = 10) -> str:
+    """En çok yükselen ve düşen hisseler. market: boş=tüm pazarlar"""
+    results = scan_top_movers(market if market else None, top_n)
+    return json.dumps(results, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def discover_support_resistance(market: str = "", top_n: int = 10) -> str:
+    """Destek/dirence yakın hisseler: 3 aylık high/low seviyelerine yaklaşan semboller"""
+    results = scan_near_support_resistance(market if market else None, top_n)
+    return json.dumps({"near_levels": results}, indent=2, ensure_ascii=False)
 
 
 def main():

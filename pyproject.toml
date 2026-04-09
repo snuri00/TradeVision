@@ -23,6 +23,7 @@ trader-mcp = "trader.mcp_server.server:main"
 trader-collect-data = "scripts.collect_data:main"
 trader-collect-news = "scripts.collect_news:main"
 trader-daily-report = "scripts.daily_report:main"
+trader-scheduler = "scripts.scheduled_runner:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

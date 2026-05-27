@@ -21,6 +21,10 @@ from trader.analysis.sentiment import get_fear_greed_proxy, get_insider_activity
 from trader.analysis.discovery import (
     scan_volume_anomalies, scan_gap_moves, scan_top_movers, scan_near_support_resistance,
 )
+from trader.analysis.comparison import compare_stocks as _compare_stocks
+from trader.analysis.risk import get_portfolio_risk_metrics
+from trader.analysis.screener import screen_stocks as _screen_stocks
+from trader.analysis.sector import get_sector_performance
 from trader.trading.executor import execute_trade
 from trader.trading.portfolio import get_portfolio_status
 from trader.reports.performance import get_performance_report
@@ -419,6 +423,151 @@ def discover_support_resistance(market: str = "", top_n: int = 10) -> str:
     """Destek/dirence yakın hisseler: 3 aylık high/low seviyelerine yaklaşan semboller"""
     results = scan_near_support_resistance(market if market else None, top_n)
     return json.dumps({"near_levels": results}, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def compare_stocks_tool(symbols: str, period: str = "3mo") -> str:
+    """Çoklu hisseyi yan yana karşılaştır: getiri, volatilite, RSI, P/E, P/B, sektör ve momentum.
+    symbols: virgülle ayrılmış semboller (örn: AAPL,MSFT,GOOGL veya THYAO.IS,GARAN.IS)
+    period: 1mo, 3mo, 6mo, 1y"""
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        return json.dumps({"error": "Lütfen en az bir sembol girin"})
+    result = _compare_stocks(sym_list, period=period)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+def get_portfolio_risk(lookback_period: str = "1y") -> str:
+    """Portföy risk metrikleri: VaR (95%/99%), Sharpe Ratio, Sortino Ratio, max drawdown, beta vs S&P 500 ve yıllık volatilite.
+    lookback_period: 3mo, 6mo, 1y, 2y"""
+    result = get_portfolio_risk_metrics(lookback_period=lookback_period)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+def screen_stocks_tool(
+    market: str = "",
+    max_pe: float = 0,
+    min_pe: float = 0,
+    min_roe: float = 0,
+    max_rsi: float = 0,
+    min_rsi: float = 0,
+    min_volume: int = 0,
+    min_dividend_yield: float = 0,
+    min_return_1mo: float = 0,
+    max_return_1mo: float = 0,
+    above_sma50: str = "",
+    top_n: int = 20,
+) -> str:
+    """Özel kriter taramas:: hisseleri fundamental ve teknik filtrelere göre tara.
+    market: bist, us, uk, germany, france, japan, crypto (boş=tüm pazarlar)
+    max_pe: maksimum P/E (0=filtre yok)
+    min_pe: minimum P/E (0=filtre yok)
+    min_roe: minimum ROE % (0=filtre yok)
+    max_rsi: maksimum RSI - örn 30 (aşırı satış) (0=filtre yok)
+    min_rsi: minimum RSI - örn 70 (aşırı alış) (0=filtre yok)
+    min_volume: minimum günlük hacim (0=filtre yok)
+    min_dividend_yield: minimum temettü verimi % (0=filtre yok)
+    min_return_1mo / max_return_1mo: 1 aylık getiri % aralığı (0=filtre yok)
+    above_sma50: 'true'=SMA50 üstü, 'false'=SMA50 altı, ''=filtre yok
+    top_n: maksimum sonuç sayısı"""
+    sma_filter = None
+    if above_sma50.lower() == "true":
+        sma_filter = True
+    elif above_sma50.lower() == "false":
+        sma_filter = False
+
+    result = _screen_stocks(
+        market=market if market else "",
+        min_pe=min_pe if min_pe > 0 else None,
+        max_pe=max_pe if max_pe > 0 else None,
+        min_roe=min_roe if min_roe > 0 else None,
+        min_rsi=min_rsi if min_rsi > 0 else None,
+        max_rsi=max_rsi if max_rsi > 0 else None,
+        min_volume=min_volume if min_volume > 0 else None,
+        min_dividend_yield=min_dividend_yield if min_dividend_yield > 0 else None,
+        min_return_1mo=min_return_1mo if min_return_1mo != 0 else None,
+        max_return_1mo=max_return_1mo if max_return_1mo != 0 else None,
+        above_sma50=sma_filter,
+        top_n=top_n,
+    )
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+def get_sector_analysis(period: str = "1mo") -> str:
+    """Sektör performans analizi: ABD S&P 500 sektör ETF'leri ve global endeksler bazında hangi sektörler yükseliyor/düşüyor, sektör rotasyonu sinyalleri.
+    period: 1wk, 1mo, 3mo, 6mo, 1y"""
+    result = get_sector_performance(period=period)
+    return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+def get_options_chain(symbol: str, expiration: str = "") -> str:
+    """Opsiyon zinciri verisi: calls ve puts için strike fiyatlar, son fiyat, bid/ask, IV, hacim ve açık faiz.
+    symbol: hisse sembolü (örn: AAPL, TSLA)
+    expiration: vade tarihi YYYY-MM-DD formatında (boş=en yakın vade)"""
+    import yfinance as yf
+
+    try:
+        ticker = yf.Ticker(symbol)
+        expirations = ticker.options
+
+        if not expirations:
+            return json.dumps({"symbol": symbol, "error": "No options data available"})
+
+        # Use specified or nearest expiration
+        if expiration and expiration in expirations:
+            exp_date = expiration
+        else:
+            exp_date = expirations[0]
+
+        chain = ticker.option_chain(exp_date)
+
+        def format_options(df, option_type: str) -> list[dict]:
+            results = []
+            for _, row in df.iterrows():
+                results.append({
+                    "type": option_type,
+                    "strike": row.get("strike"),
+                    "last_price": row.get("lastPrice"),
+                    "bid": row.get("bid"),
+                    "ask": row.get("ask"),
+                    "volume": int(row.get("volume", 0)) if row.get("volume") is not None else 0,
+                    "open_interest": int(row.get("openInterest", 0)) if row.get("openInterest") is not None else 0,
+                    "implied_volatility": round(float(row.get("impliedVolatility", 0)) * 100, 2),
+                    "in_the_money": bool(row.get("inTheMoney", False)),
+                    "contract_symbol": row.get("contractSymbol", ""),
+                })
+            return results
+
+        calls = format_options(chain.calls, "call")
+        puts = format_options(chain.puts, "put")
+
+        # Current price for context
+        info = ticker.info
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+
+        # ATM options (nearest to current price)
+        atm_call = min(calls, key=lambda x: abs(x["strike"] - current_price)) if calls and current_price else None
+        atm_put = min(puts, key=lambda x: abs(x["strike"] - current_price)) if puts and current_price else None
+
+        return json.dumps({
+            "symbol": symbol,
+            "current_price": current_price,
+            "expiration": exp_date,
+            "available_expirations": list(expirations[:6]),
+            "atm_call": atm_call,
+            "atm_put": atm_put,
+            "calls_count": len(calls),
+            "puts_count": len(puts),
+            "calls": calls,
+            "puts": puts,
+        }, indent=2, ensure_ascii=False, default=str)
+
+    except Exception as e:
+        return json.dumps({"symbol": symbol, "error": str(e)})
 
 
 def main():
